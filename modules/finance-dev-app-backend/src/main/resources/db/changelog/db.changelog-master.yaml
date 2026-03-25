@@ -1,0 +1,19 @@
+databaseChangeLog:
+  - includeAll:
+     path: classpath:db/changelog/migrations/
+  - property:
+     name: type.id
+     value: bigint(20)
+     dbms: mysql
+  - property:
+     name: type.text
+     value: text
+     dbms: mysql
+  - property:
+     name: type.bool
+     value: boolean
+     dbms: mysql
+  - property:
+     name: type.externalId
+     value: varchar(64)
+     dbms: mysql

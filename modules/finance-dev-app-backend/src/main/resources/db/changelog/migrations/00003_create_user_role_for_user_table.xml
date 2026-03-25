@@ -1,0 +1,25 @@
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog     http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.1.xsd">
+
+    <property name="table.name" value="user_role_for_user" global="false"/>
+
+    <changeSet author="Juan Becerra" id="00003_create_${table.name}_table">
+        <preConditions onFail="MARK_RAN" onFailMessage="Table ${table.name} already exists">
+            <not>
+                <tableExists tableName="${table.name}"/>
+            </not>
+        </preConditions>
+        <createTable tableName="${table.name}">
+            <column name="role_id" type="${type.id}">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="role_user_role_for_user_PK"
+                             foreignKeyName="FK_role_user_role_for_role_id" referencedTableName="role" referencedColumnNames="id"/>
+            </column>
+            <column name="user_id" type="${type.id}">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="user_user_role_for_user_PK"
+                             foreignKeyName="FK_user_user_role_for_user_id" referencedTableName="user" referencedColumnNames="id"/>
+            </column>
+        </createTable>
+    </changeSet>
+</databaseChangeLog>
