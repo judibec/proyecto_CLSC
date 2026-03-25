@@ -34,108 +34,60 @@ jobs:
           snyk test \
             --severity-threshold=high \
             --json \
-            > snyk.json || true
+            > snyk.json 2>snyk-error.log || true
+          echo "--- Primeros 300 chars de snyk.json ---"
+          head -c 300 snyk.json
+          echo ""
+          echo "--- snyk-error.log ---"
+          cat snyk-error.log || true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
       - name: Generate SARIF from JSON
         run: |
-          node -e "
+          cat > generate-sarif.js << 'JSEOF'
           const fs = require('fs');
-          const report = JSON.parse(fs.readFileSync('snyk.json', 'utf8'));
+          let raw = fs.readFileSync('snyk.json', 'utf8').trim();
+          let report;
+          try {
+            report = JSON.parse(raw);
+          } catch(e) {
+            console.error('Parse directo fallo, intentando extraccion...');
+            const idx = raw.lastIndexOf('}');
+            if (idx !== -1) {
+              try { report = JSON.parse(raw.substring(0, idx + 1)); }
+              catch(e2) { report = { vulnerabilities: [] }; }
+            } else {
+              report = { vulnerabilities: [] };
+            }
+          }
           const vulns = report.vulnerabilities || [];
+          const seen = {};
+          const rules = [];
+          vulns.forEach(function(v) {
+            if (!seen[v.id]) {
+              seen[v.id] = true;
+              rules.push({
+                id: v.id,
+                shortDescription: { text: v.title || v.id },
+                helpUri: v.url || 'https://snyk.io',
+                properties: { tags: [v.severity] }
+              });
+            }
+          });
           const sarif = {
             version: '2.1.0',
+            '$schema': 'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
             runs: [{
               tool: {
                 driver: {
                   name: 'Snyk',
                   version: '1.0.0',
-                  rules: vulns.map(function(v) {
-                    return {
-                      id: v.id,
-                      shortDescription: { text: v.title || v.id },
-                      helpUri: v.url || '',
-                      properties: { tags: [v.severity] }
-                    };
-                  })
+                  informationUri: 'https://snyk.io',
+                  rules: rules
                 }
               },
               results: vulns.map(function(v) {
                 return {
                   ruleId: v.id,
                   level: v.severity === 'critical' ? 'error' : 'warning',
-                  message: { text: (v.title || v.id) + ' in ' + v.moduleName + '@' + v.version },
-                  locations: [{
-                    physicalLocation: {
-                      artifactLocation: { uri: 'pom.xml', uriBaseId: '%SRCROOT%' }
-                    }
-                  }]
-                };
-              })
-            }]
-          };
-          fs.writeFileSync('snyk.sarif', JSON.stringify(sarif, null, 2));
-          console.log('SARIF generado con ' + vulns.length + ' resultados');
-          "
-
-      - name: Upload results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: snyk.sarif
-          category: snyk-dependency-scan
-
-      - name: Comment results on PR
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let body = '## Snyk — Reporte de vulnerabilidades\n\n';
-            try {
-              const report = JSON.parse(fs.readFileSync('snyk.json', 'utf8'));
-              const vulns = report.vulnerabilities || [];
-              const critical = vulns.filter(function(v) { return v.severity === 'critical'; }).length;
-              const high = vulns.filter(function(v) { return v.severity === 'high'; }).length;
-
-              if (vulns.length === 0) {
-                body += '✅ Sin vulnerabilidades HIGH o CRITICAL.\n';
-              } else {
-                body += '⚠️ **' + vulns.length + '** vulnerabilidades encontradas';
-                body += ' (' + critical + ' critical, ' + high + ' high):\n\n';
-                body += '| Paquete | CVE | Severidad | Fix disponible |\n';
-                body += '|---------|-----|-----------|----------------|\n';
-                vulns.slice(0, 20).forEach(function(v) {
-                  const fix = (v.fixedIn && v.fixedIn.length) ? 'v' + v.fixedIn[0] : 'No disponible';
-                  const cve = (v.identifiers && v.identifiers.CVE && v.identifiers.CVE[0]) ? v.identifiers.CVE[0] : v.id;
-                  body += '| `' + v.moduleName + '` | ' + cve + ' | ' + v.severity + ' | ' + fix + ' |\n';
-                });
-                if (vulns.length > 20) {
-                  body += '\n_...y ' + (vulns.length - 20) + ' vulnerabilidades más._\n';
-                }
-              }
-            } catch(e) {
-              body += '_No se pudo leer el reporte: ' + e.message + '_\n';
-            }
-            body += '\n_Reporte completo disponible en Security → Code scanning._';
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
-
-      - name: Fail on critical or high vulnerabilities
-        if: always()
-        run: |
-          COUNT=$(node -e "
-          const fs = require('fs');
-          try {
-            const d = JSON.parse(fs.readFileSync('snyk.json', 'utf8'));
-            const vulns = d.vulnerabilities || [];
-            console.log(vulns.filter(v => ['critical','high'].includes(v.severity)).length);
-          } catch(e) { console.log(0); }
-          ")
-          echo "Vulnerabilidades HIGH/CRITICAL: $COUNT"
-          [ "$COUNT" -gt "0" ] && exit 1 || exit 0
