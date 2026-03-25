@@ -22,15 +22,16 @@ jobs:
         with:
           java-version: '21'
           distribution: temurin
+          cache: maven
 
       - uses: github/codeql-action/init@v3
         with:
           languages: java
           queries: security-extended,security-and-quality
 
-      - name: Build (para que CodeQL analice el bytecode)
-        run: ./mvn -B package -DskipTests
-        # Si usas Gradle: ./gradlew build -x test
+      - name: Build módulo backend
+        working-directory: modules/finance-dev-app-backend
+        run: mvn -B package -DskipTests
 
       - uses: github/codeql-action/analyze@v3
         with:
@@ -130,6 +131,17 @@ jobs:
     if: always()
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven   # o 'gradle' según tu proyecto
+
       - name: Verificar resultados
         run: |
           if [[ "${{ needs.sast.result }}"         != "success" ]] ||
