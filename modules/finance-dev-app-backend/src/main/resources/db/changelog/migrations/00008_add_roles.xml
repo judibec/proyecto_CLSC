@@ -1,0 +1,22 @@
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+     http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.1.xsd"
+>
+    <changeSet author="Daniel Ramos" id="00008_add_roles">
+        <preConditions onFail="MARK_RAN" onError="WARN">
+                <sqlCheck expectedResult="0">SELECT COUNT(*) FROM role WHERE name_rol = "ADMIN"</sqlCheck>
+                <sqlCheck expectedResult="0">SELECT COUNT(*) FROM role WHERE name_rol = "USER"</sqlCheck>
+        </preConditions>
+        <insert tableName="role">
+            <column name="external_id" value="784bacc44cab42bea968e6bfe0aa7aac"/>
+            <column name="name_rol" value="USER"/>
+        </insert>
+
+        <insert tableName="role">
+            <column name="external_id" value="53ed295f94e249de8d54462b5961e719"/>
+            <column name="name_rol" value="ADMIN"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>
