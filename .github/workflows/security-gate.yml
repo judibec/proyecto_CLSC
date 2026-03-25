@@ -102,17 +102,19 @@ jobs:
           java-version: '21'
           distribution: temurin
 
-      - name: Cache Maven
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository
-          key: maven-${{ hashFiles('**/pom.xml') }}
-
-      - name: Verificar licencias permitidas
+      - name: Verificar licencias de dependencias
+        working-directory: modules/finance-dev-app-backend
         run: |
-          ./mvnw -B license:check \
-            -Dlicense.failIfWarning=true \
-            -Dlicense.includedLicenses="MIT|Apache-2.0|BSD-2-Clause|BSD-3-Clause|ISC|LGPL-2.1"
+          mvn -B org.codehaus.mojo:license-maven-plugin:2.4.0:add-third-party \
+          -Dlicense.failIfWarning=true \
+          -Dlicense.includedLicenses="MIT|Apache-2.0|BSD-2-Clause|BSD-3-Clause|ISC|LGPL-2.1"
+
+      - name: Subir reporte de licencias
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: licenses-report
+          path: modules/finance-dev-app-backend/target/generated-sources/license/
         # Si usas Gradle: ./gradlew checkLicense
 
   # ── 5. Gate final ──────────────────────────────────────────────────
