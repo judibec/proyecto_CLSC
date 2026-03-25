@@ -29,9 +29,6 @@ jobs:
       - name: Install Snyk CLI
         run: npm install -g snyk
 
-      - name: Authenticate Snyk
-        run: snyk auth ${{ secrets.SNYK_TOKEN }}
-
       - name: Run Snyk vulnerability scan
         run: |
           snyk test \
@@ -43,7 +40,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
       - name: Upload results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: snyk.sarif
@@ -57,18 +54,39 @@ jobs:
             const fs = require('fs');
             let body = '## Snyk — Reporte de vulnerabilidades\n\n';
             try {
-              const report = JSON.parse(fs.readFileSync('snyk.json', 'utf8'));
+              const raw = fs.readFileSync('snyk.json', 'utf8');
+              const report = JSON.parse(raw);
               const vulns = report.vulnerabilities || [];
               if (vulns.length === 0) {
                 body += '✅ Sin vulnerabilidades HIGH o CRITICAL.';
               } else {
-                body += `⚠️ **${vulns.length}** vulnerabilidades encontradas:\n\n`;
+                body += '⚠️ **' + vulns.length + '** vulnerabilidades encontradas:\n\n';
                 body += '| Paquete | CVE | Severidad | Fix |\n|---|---|---|---|\n';
-                vulns.slice(0, 20).forEach(v => {
-                  const fix = v.fixedIn?.length ? `v${v.fixedIn[0]}` : 'No disponible';
-                  body += `| \`${v.moduleName}\` | ${v.identifiers?.CVE?.[0] || v.id} | ${v.severity} | ${fix} |\n`;
+                vulns.slice(0, 20).forEach(function(v) {
+                  const fix = (v.fixedIn && v.fixedIn.length) ? 'v' + v.fixedIn[0] : 'No disponible';
+                  const cve = (v.identifiers && v.identifiers.CVE && v.identifiers.CVE[0]) ? v.identifiers.CVE[0] : v.id;
+                  body += '| `' + v.moduleName + '` | ' + cve + ' | ' + v.severity + ' | ' + fix + ' |\n';
                 });
               }
-            } catch(e) { body += '_Reporte no disponible._'; }
-            github.rest.issues.createComment({
-              issue_number: contex
+            } catch(e) {
+              body += '_No se pudo leer el reporte: ' + e.message + '_\n';
+            }
+            body += '\n_Reporte completo disponible en Security → Code scanning._';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fail on critical vulnerabilities
+        if: always()
+        run: |
+          COUNT=$(python3 -c "
+          import json
+          with open('snyk.json') as f:
+            d = json.load(f)
+          print(sum(1 for v in d.get('vulnerabilities', []) if v['severity'] in ['critical', 'high']))
+          " 2>/dev/null || echo 0)
+          echo "Vulnerabilidades HIGH/CRITICAL encontradas: $COUNT"
+          [ "$COUNT" -gt "0" ] && exit 1 || exit 0
