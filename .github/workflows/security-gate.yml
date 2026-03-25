@@ -1,0 +1,142 @@
+name: Security Gate
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # ── 1. SAST con CodeQL ─────────────────────────────────────────────
+  sast:
+    name: SAST – CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          queries: security-extended,security-and-quality
+
+      - name: Build (para que CodeQL analice el bytecode)
+        run: ./mvnw -B package -DskipTests
+        # Si usas Gradle: ./gradlew build -x test
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:java
+
+  # ── 2. Vulnerabilidades en dependencias ────────────────────────────
+  dependencies:
+    name: Dependencias – Trivy + OWASP
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ hashFiles('**/pom.xml') }}
+          # Si usas Gradle: path: ~/.gradle/caches  key: gradle-${{ hashFiles('**/*.gradle*') }}
+
+      - name: OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: ${{ github.repository }}
+          path: .
+          format: HTML
+          args: >
+            --failOnCVSS 7
+            --enableRetired
+
+      - name: Subir reporte OWASP
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: owasp-report
+          path: reports/
+
+      - name: Trivy – filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          format: table
+
+  # ── 3. Secrets ─────────────────────────────────────────────────────
+  secrets:
+    name: Secrets – Gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # escanea todo el historial git
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 4. Licencias ───────────────────────────────────────────────────
+  licenses:
+    name: Licencias – Maven License Plugin
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ hashFiles('**/pom.xml') }}
+
+      - name: Verificar licencias permitidas
+        run: |
+          ./mvnw -B license:check \
+            -Dlicense.failIfWarning=true \
+            -Dlicense.includedLicenses="MIT|Apache-2.0|BSD-2-Clause|BSD-3-Clause|ISC|LGPL-2.1"
+        # Si usas Gradle: ./gradlew checkLicense
+
+  # ── 5. Gate final ──────────────────────────────────────────────────
+  gate:
+    name: Gate – todos los checks OK
+    runs-on: ubuntu-latest
+    needs: [sast, dependencies, secrets, licenses]
+    if: always()
+
+    steps:
+      - name: Verificar resultados
+        run: |
+          if [[ "${{ needs.sast.result }}"         != "success" ]] ||
+             [[ "${{ needs.dependencies.result }}" != "success" ]] ||
+             [[ "${{ needs.secrets.result }}"      != "success" ]] ||
+             [[ "${{ needs.licenses.result }}"     != "success" ]]; then
+            echo "❌ Uno o más checks fallaron. Merge bloqueado."
+            exit 1
+          fi
+          echo "✅ Todos los checks pasaron."
