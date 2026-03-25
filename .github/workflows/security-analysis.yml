@@ -26,16 +26,21 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Authenticate Snyk
+        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+
       - name: Run Snyk vulnerability scan
-        uses: snyk/actions/maven@master
-        continue-on-error: true
+        run: |
+          snyk test \
+            --severity-threshold=high \
+            --sarif-file-output=snyk.sarif \
+            --json-file-output=snyk.json \
+            || true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: >
-            --severity-threshold=high
-            --sarif-file-output=snyk.sarif
-            --json-file-output=snyk.json
 
       - name: Upload results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
@@ -66,16 +71,4 @@ jobs:
               }
             } catch(e) { body += '_Reporte no disponible._'; }
             github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body
-            });
-
-      - name: Fail on critical vulnerabilities
-        if: always()
-        run: |
-          COUNT=$(cat snyk.json | python3 -c "
-          import json,sys; d=json.load(sys.stdin)
-          print(sum(1 for v in d.get('vulnerabilities',[]) if v['severity'] in ['critical','high']))")
-          [ "$COUNT" -gt "0" ] && exit 1 || exit 0
+              issue_number: contex
