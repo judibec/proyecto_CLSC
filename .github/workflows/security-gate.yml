@@ -29,7 +29,7 @@ jobs:
           queries: security-extended,security-and-quality
 
       - name: Build (para que CodeQL analice el bytecode)
-        run: ./mvnw -B package -DskipTests
+        run: ./mvn -B package -DskipTests
         # Si usas Gradle: ./gradlew build -x test
 
       - uses: github/codeql-action/analyze@v3
