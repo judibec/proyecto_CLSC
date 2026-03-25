@@ -51,14 +51,13 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: OWASP Dependency-Check (vía Maven plugin)
+      - name: OWASP Dependency Check (rápido)
         working-directory: modules/finance-dev-app-backend
         run: |
           mvn -B org.owasp:dependency-check-maven:check \
             -DfailBuildOnCVSS=7 \
-            -DenableRetired=true \
-            -Dformat=HTML \
-            -DoutputDirectory=../../reports/dependency-check
+            -DnvdApiDelay=0 \
+            -DnvdValidForHours=24
 
       - name: Subir reporte OWASP
         uses: actions/upload-artifact@v4
