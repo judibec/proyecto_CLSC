@@ -19,10 +19,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
           cache: maven
 
@@ -35,7 +35,10 @@ jobs:
           project: '${{ github.repository }}'
           path: '.'
           format: 'HTML,SARIF,JSON'
-          args: --enableRetired --failOnCVSS 7
+          args: >
+            --enableRetired
+            --failOnCVSS 7
+        # ✅ Sin bloque env — el contenedor usa su Java interno
 
       - name: Upload OWASP report
         uses: actions/upload-artifact@v4
