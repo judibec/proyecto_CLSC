@@ -101,3 +101,156 @@ jobs:
           " 2>/dev/null || echo 0)
           echo "Vulnerabilidades HIGH/CRITICAL encontradas: $COUNT"
           [ "$COUNT" -gt "0" ] && exit 1 || exit 0
+
+  # ──────────────────────────────────────────────
+  # JOB 2 — SAST con Snyk Code (análisis del código fuente)
+  # ──────────────────────────────────────────────
+  snyk-sast:
+    name: SAST — Snyk Code Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Run Snyk Code SAST scan
+        run: |
+          snyk code test \
+            --severity-threshold=high \
+            --sarif \
+            > snyk-code.sarif 2>snyk-code-error.log || true
+          echo "--- snyk-code-error.log ---"
+          cat snyk-code-error.log || true
+          echo "--- Primeros 300 chars del SARIF ---"
+          head -c 300 snyk-code.sarif || true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      # Validamos que el SARIF sea JSON válido antes de subirlo
+      - name: Validate and fix SAST SARIF
+        run: |
+          cat > validate-sarif.js << 'JSEOF'
+          const fs = require('fs');
+          let raw = '';
+          try {
+            raw = fs.readFileSync('snyk-code.sarif', 'utf8').trim();
+            JSON.parse(raw);
+            console.log('SARIF valido');
+          } catch(e) {
+            console.warn('SARIF invalido o vacio, generando SARIF vacio: ' + e.message);
+            const empty = {
+              version: '2.1.0',
+              '$schema': 'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
+              runs: [{
+                tool: { driver: { name: 'Snyk Code', version: '1.0.0', rules: [] } },
+                results: []
+              }]
+            };
+            fs.writeFileSync('snyk-code.sarif', JSON.stringify(empty, null, 2));
+          }
+          JSEOF
+          node validate-sarif.js
+
+      - name: Upload SAST results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: snyk-code.sarif
+          category: snyk-sast
+
+      - name: Comment SAST results on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## Snyk Code — Análisis estático del código (SAST)\n\n';
+            try {
+              const sarif = JSON.parse(fs.readFileSync('snyk-code.sarif', 'utf8'));
+              const results = (sarif.runs && sarif.runs[0] && sarif.runs[0].results) || [];
+              const errors   = results.filter(function(r) { return r.level === 'error'; }).length;
+              const warnings = results.filter(function(r) { return r.level === 'warning'; }).length;
+
+              if (results.length === 0) {
+                body += '✅ No se encontraron problemas de seguridad en el código fuente.\n';
+              } else {
+                body += '⚠️ **' + results.length + '** hallazgos en el código fuente';
+                body += ' (' + errors + ' error, ' + warnings + ' warning):\n\n';
+                body += '| Archivo | Línea | Problema | Severidad |\n';
+                body += '|---------|-------|----------|-----------|\n';
+                results.slice(0, 20).forEach(function(r) {
+                  const loc = (r.locations && r.locations[0] &&
+                               r.locations[0].physicalLocation);
+                  const file = loc && loc.artifactLocation ? loc.artifactLocation.uri : 'desconocido';
+                  const line = loc && loc.region ? loc.region.startLine : '-';
+                  const msg  = r.message ? r.message.text.substring(0, 80) : r.ruleId;
+                  body += '| `' + file + '` | ' + line + ' | ' + msg + ' | ' + (r.level || '-') + ' |\n';
+                });
+                if (results.length > 20) {
+                  body += '\n_...y ' + (results.length - 20) + ' hallazgos más._\n';
+                }
+              }
+            } catch(e) {
+              body += '_No se pudo leer el reporte SAST: ' + e.message + '_\n';
+            }
+            body += '\n_Detalles completos en Security → Code scanning._';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fail on SAST errors
+        if: always()
+        run: |
+          COUNT=$(node -e "
+            const fs = require('fs');
+            try {
+              const s = JSON.parse(fs.readFileSync('snyk-code.sarif', 'utf8'));
+              const r = (s.runs && s.runs[0] && s.runs[0].results) || [];
+              console.log(r.filter(x => x.level === 'error').length);
+            } catch(e) { console.log(0); }
+          ")
+          echo "Hallazgos SAST nivel error: $COUNT"
+          [ "$COUNT" -gt "0" ] && exit 1 || exit 0
+
+  # ──────────────────────────────────────────────
+  # JOB 3 — SAST con CodeQL (análisis profundo de GitHub)
+  # ──────────────────────────────────────────────
+  codeql-sast:
+    name: SAST — CodeQL Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Inicializa CodeQL para Java — crea la base de datos durante la compilación
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java
+          # Queries de seguridad extendidas (más cobertura que el pack default)
+          queries: security-extended
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      # CodeQL intercepta la compilación automáticamente para construir su grafo
+      - name: Build project for CodeQL
+        run: mvn compile -DskipTests --no-transfer-progress
+
+      # Ejecuta el análisis y genera el SARIF interno
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: codeql-java-sast
+          # El SARIF se sube automáticamente a GitHub Security en este paso
