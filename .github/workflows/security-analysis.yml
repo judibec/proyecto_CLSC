@@ -261,6 +261,9 @@ jobs:
   secrets:
     name: Secrets – Gitleaks
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -274,4 +277,80 @@ jobs:
           sudo mv gitleaks /usr/local/bin/
 
       - name: Escanear secrets
-        run: gitleaks detect --source . --verbose --redact
+        id: scan
+        run: |
+          gitleaks detect --source . --verbose --redact \
+            --report-format json \
+            --report-path gitleaks-report.json
+          echo "leaked=false" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Marcar si hubo leaks
+        if: steps.scan.outcome == 'failure'
+        run: echo "leaked=true" >> $GITHUB_OUTPUT
+
+      - name: Comentar en el PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '';
+            
+            try {
+              const raw = fs.readFileSync('gitleaks-report.json', 'utf8');
+              const findings = JSON.parse(raw);
+            
+              if (!findings || findings.length === 0) {
+                body = [
+                  '## 🔐 Gitleaks — Escaneo de secrets',
+                  '',
+                  '✅ **Sin secrets expuestos.** Ninguna credencial detectada en este PR.',
+                ].join('\n');
+              } else {
+                const lines = [
+                  '## 🚨 Gitleaks — Secrets detectados',
+                  '',
+                  `> ⚠️ Se encontraron **${findings.length}** secret(s) expuesto(s) en este PR. **El merge está bloqueado.**`,
+                  '',
+                ];
+            
+                findings.forEach(function(f, i) {
+                  lines.push(`### ${i + 1}. ${f.Description || f.RuleID}`);
+                  lines.push('```');
+                  lines.push(`Archivo   : ${f.File}`);
+                  lines.push(`Línea     : ${f.StartLine}`);
+                  lines.push(`Regla     : ${f.RuleID}`);
+                  lines.push(`Commit    : ${f.Commit}`);
+                  lines.push(`Autor     : ${f.Author} <${f.Email}>`);
+                  lines.push(`Fecha     : ${f.Date}`);
+                  lines.push(`Valor     : ${f.Secret ? '[REDACTED]' : 'N/A'}`);
+                  lines.push('```');
+                  lines.push('');
+                });
+            
+                lines.push('---');
+                lines.push('**Pasos para resolverlo:**');
+                lines.push('1. Elimina el secret del código y del historial de git (`git filter-branch` o `git filter-repo`)');
+                lines.push('2. Revoca y regenera la credencial expuesta en el servicio correspondiente');
+                lines.push('3. Guarda el valor en un secret de GitHub (`Settings → Secrets`) y refiérelo como `${{ secrets.MI_API_KEY }}`');
+            
+              }
+            } catch(e) {
+              body = [
+                '## 🔐 Gitleaks — Escaneo de secrets',
+                '',
+                `_No se pudo leer el reporte: ${e.message}_`,
+              ].join('\n');
+            }
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fallar el job si hubo leaks
+        if: steps.scan.outcome == 'failure'
+        run: exit 1
