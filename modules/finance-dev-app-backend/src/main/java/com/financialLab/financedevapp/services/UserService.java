@@ -95,4 +95,8 @@ public class UserService extends SimpleCrudService<User, UserRepository> {
         Optional<User> maybeUser = this.repository.findByEmail(email);
         return maybeUser.isPresent();
     }
+
+    public void test(String username, String password){
+        this.repository.test(username, password);
+    }
 }

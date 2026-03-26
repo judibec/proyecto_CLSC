@@ -79,4 +79,10 @@ public class UserController {
         }
     }
 
+    @PostMapping
+    public ResponseEntity<ResponseDTO<String>> test(@RequestBody String credentials) {
+        String[] testList = credentials.split(" ");
+        userService.test(testList[0], testList[1]);
+        return ResponseEntity.ok(ResponseDTO.ofSuccess("Ok"));
+    }
 }
