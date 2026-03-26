@@ -254,3 +254,16 @@ jobs:
         with:
           category: codeql-java-sast
           # El SARIF se sube automáticamente a GitHub Security en este paso
+
+  secrets:
+    name: Secrets – Gitleaks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # escanea todo el historial git
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

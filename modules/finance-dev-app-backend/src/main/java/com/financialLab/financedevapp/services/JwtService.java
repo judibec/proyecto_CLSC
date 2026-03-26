@@ -20,6 +20,7 @@ public class JwtService {
     //TODO: Pass this to the environment variables and create a EnvService for be able to get Env Vars of the application.properties
     private static final String SECRET = "REMOVED";
     private static final long VALIDITY = TimeUnit.DAYS.toMillis(1);
+    private static final String API_KEY = "REMOVED";
 
     public String generateToken(UserDetails userDetails) {
         Map<String, String> claims = new HashMap<>();
