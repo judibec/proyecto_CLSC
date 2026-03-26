@@ -3,6 +3,7 @@ package com.financialLab.financedevapp.services;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
@@ -17,10 +18,13 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class JwtService {
 
-    //TODO: Pass this to the environment variables and create a EnvService for be able to get Env Vars of the application.properties
-    private static final String SECRET = "EDDFE35B2F6CEE34311F7694FA9E30FCC39E56FA62EB63D1F5488C556816366EBA9B422DA71EF0A3D633F99833CE0A1224442E2D9D515A29564149E24ADCD8B5";
+    @Value("${jwt.secret:}")
+    private String SECRET;
+
+    @Value("${stripe.api.key:}")
+    private String API_KEY;
+
     private static final long VALIDITY = TimeUnit.DAYS.toMillis(1);
-    private static final String API_KEY = "sk_test_51H8k9L2dX9aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890abcdef";
 
     public String generateToken(UserDetails userDetails) {
         Map<String, String> claims = new HashMap<>();
