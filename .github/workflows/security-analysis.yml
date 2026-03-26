@@ -289,75 +289,74 @@ jobs:
         if: steps.scan.outcome == 'failure'
         run: echo "leaked=true" >> $GITHUB_OUTPUT
 
-      - name: Debug reporte
-        if: always()
-        run: |
-            echo "--- Existe el archivo? ---"
-            ls -la gitleaks-report.json || echo "No existe"
-            echo "--- Contenido ---"
-            cat gitleaks-report.json || echo "Vacío o no existe"
-
       - name: Comentar en el PR
         if: always()
         uses: actions/github-script@v7
         with:
-          script: |
-            const fs = require('fs');
-            let body = '';
-            
-            try {
-              const raw = fs.readFileSync('gitleaks-report.json', 'utf8');
-              const findings = JSON.parse(raw);
-            
-              if (!findings || findings.length === 0) {
-                body = [
-                  '## 🔐 Gitleaks — Escaneo de secrets',
-                  '',
-                  '✅ **Sin secrets expuestos.** Ninguna credencial detectada en este PR.',
-                ].join('\n');
-              } else {
+            script: |
+              const fs = require('fs');
+              
+              let body = '## 🔐 Gitleaks — Escaneo de secrets\n\n✅ **Sin secrets expuestos.** Ninguna credencial detectada en este PR.';
+              
+              let findings = [];
+              try {
+                const raw = fs.readFileSync('gitleaks-report.json', 'utf8');
+                const parsed = JSON.parse(raw);
+                findings = Array.isArray(parsed) ? parsed : [];
+              } catch(e) {
+                body = '## 🔐 Gitleaks — Escaneo de secrets\n\n_No se pudo leer el reporte: ' + e.message + '_';
+              }
+              
+              if (findings.length > 0) {
                 const lines = [
                   '## 🚨 Gitleaks — Secrets detectados',
                   '',
-                  `> ⚠️ Se encontraron **${findings.length}** secret(s) expuesto(s) en este PR. **El merge está bloqueado.**`,
+                  `> Se encontraron **${findings.length}** secret(s) expuesto(s) en este PR. El merge está bloqueado.`,
+                  '',
+                  '---',
                   '',
                 ];
-            
+              
                 findings.forEach(function(f, i) {
-                  lines.push(`### ${i + 1}. ${f.Description || f.RuleID}`);
+                  const date = new Date(f.Date).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
+                  lines.push(`### ${i + 1}. ${f.Description}`);
                   lines.push('```');
-                  lines.push(`Archivo   : ${f.File}`);
-                  lines.push(`Línea     : ${f.StartLine}`);
-                  lines.push(`Regla     : ${f.RuleID}`);
-                  lines.push(`Commit    : ${f.Commit}`);
-                  lines.push(`Autor     : ${f.Author} <${f.Email}>`);
-                  lines.push(`Fecha     : ${f.Date}`);
-                  lines.push(`Valor     : ${f.Secret ? '[REDACTED]' : 'N/A'}`);
+                  lines.push(`Archivo  : ${f.File}`);
+                  lines.push(`Línea    : ${f.StartLine}`);
+                  lines.push(`Regla    : ${f.RuleID}`);
+                  lines.push(`Commit   : ${f.Commit.substring(0, 8)}`);
+                  lines.push(`Autor    : ${f.Author} <${f.Email}>`);
+                  lines.push(`Fecha    : ${date}`);
+                  lines.push(`Entropía : ${f.Entropy}`);
                   lines.push('```');
                   lines.push('');
                 });
-            
+              
                 lines.push('---');
-                lines.push('**Pasos para resolverlo:**');
-                lines.push('1. Elimina el secret del código y del historial de git (`git filter-branch` o `git filter-repo`)');
+                lines.push('');
+                lines.push('**Cómo resolverlo:**');
+                lines.push('');
+                lines.push('1. Elimina el secret del código y del historial');
+                lines.push('   ```bash');
+                lines.push('   git filter-repo --path <archivo> --invert-paths');
+                lines.push('   ```');
                 lines.push('2. Revoca y regenera la credencial expuesta en el servicio correspondiente');
-                lines.push('3. Guarda el valor en un secret de GitHub (`Settings → Secrets`) y refiérelo como `${{ secrets.MI_API_KEY }}`');
-            
+                lines.push('3. Guárda el valor en GitHub Secrets (`Settings → Secrets and variables → Actions`)');
+                lines.push('4. Refiérelo en el código como variable de entorno:');
+                lines.push('   ```yaml');
+                lines.push('   env:');
+                lines.push('     MI_SECRET: ${{ secrets.MI_SECRET }}');
+                lines.push('   ```');
+              
+                body = lines.join('\n');
               }
-            } catch(e) {
-              body = [
-                '## 🔐 Gitleaks — Escaneo de secrets',
-                '',
-                `_No se pudo leer el reporte: ${e.message}_`,
-              ].join('\n');
-            }
-            
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+              
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
 
       - name: Fallar el job si hubo leaks
         if: steps.scan.outcome == 'failure'
