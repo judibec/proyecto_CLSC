@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 public class JwtService {
 
     //TODO: Pass this to the environment variables and create a EnvService for be able to get Env Vars of the application.properties
-    private static final String SECRET = "EDDFE35B2F6CEE34311F7694FA9E30FCC39E56FA62EB63D1F5488C556816366EBA9B422DA71EF0A3D633F99833CE0A1224442E2D9D515A29564149E24ADCD8B5";
+    // private static final String SECRET = "EDDFE35B2F6CEE34311F7694FA9E30FCC39E56FA62EB63D1F5488C556816366EBA9B422DA71EF0A3D633F99833CE0A1224442E2D9D515A29564149E24ADCD8B5";
     private static final long VALIDITY = TimeUnit.DAYS.toMillis(1);
 
     public String generateToken(UserDetails userDetails) {
