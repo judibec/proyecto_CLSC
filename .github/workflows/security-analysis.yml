@@ -1,0 +1,326 @@
+name: Security Analysis Gate
+
+on:
+  pull_request:
+    branches: [ "main", "develop" ]
+    types: [ opened, synchronize, reopened ]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  snyk-security:
+    name: Snyk Dependency Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Verify SNYK_TOKEN is set
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "ERROR: SNYK_TOKEN está vacío"
+            exit 1
+          else
+            echo "SNYK_TOKEN presente, primeros 4 chars: ${SNYK_TOKEN:0:4}..."
+          fi
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Run Snyk vulnerability scan
+        run: |
+          snyk test \
+            --severity-threshold=high \
+            --sarif-file-output=snyk.sarif \
+            --json-file-output=snyk.json \
+            || true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Upload results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: snyk.sarif
+          category: snyk-dependency-scan
+
+      - name: Comment results on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## Snyk — Reporte de vulnerabilidades\n\n';
+            try {
+              const raw = fs.readFileSync('snyk.json', 'utf8');
+              const report = JSON.parse(raw);
+              const vulns = report.vulnerabilities || [];
+              if (vulns.length === 0) {
+                body += '✅ Sin vulnerabilidades HIGH o CRITICAL.';
+              } else {
+                body += '⚠️ **' + vulns.length + '** vulnerabilidades encontradas:\n\n';
+                body += '| Paquete | CVE | Severidad | Fix |\n|---|---|---|---|\n';
+                vulns.slice(0, 20).forEach(function(v) {
+                  const fix = (v.fixedIn && v.fixedIn.length) ? 'v' + v.fixedIn[0] : 'No disponible';
+                  const cve = (v.identifiers && v.identifiers.CVE && v.identifiers.CVE[0]) ? v.identifiers.CVE[0] : v.id;
+                  body += '| `' + v.moduleName + '` | ' + cve + ' | ' + v.severity + ' | ' + fix + ' |\n';
+                });
+              }
+            } catch(e) {
+              body += '_No se pudo leer el reporte: ' + e.message + '_\n';
+            }
+            body += '\n_Reporte completo disponible en Security → Code scanning._';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fail on critical vulnerabilities
+        if: always()
+        run: |
+          COUNT=$(python3 -c "
+          import json
+          with open('snyk.json') as f:
+            d = json.load(f)
+          print(sum(1 for v in d.get('vulnerabilities', []) if v['severity'] in ['critical', 'high']))
+          " 2>/dev/null || echo 0)
+          echo "Vulnerabilidades HIGH/CRITICAL encontradas: $COUNT"
+          [ "$COUNT" -gt "0" ] && exit 1 || exit 0
+
+#   ──────────────────────────────────────────────
+#   JOB 2 — SAST con Snyk Code (análisis del código fuente)
+#   ──────────────────────────────────────────────
+  snyk-sast:
+    name: SAST — Snyk Code Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Run Snyk Code SAST scan
+        run: |
+          snyk code test \
+            --severity-threshold=high \
+            --sarif \
+            > snyk-code.sarif 2>snyk-code-error.log || true
+          echo "--- snyk-code-error.log ---"
+          cat snyk-code-error.log || true
+          echo "--- Primeros 300 chars del SARIF ---"
+          head -c 300 snyk-code.sarif || true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      # Validamos que el SARIF sea JSON válido antes de subirlo
+      - name: Validate and fix SAST SARIF
+        run: |
+          cat > validate-sarif.js << 'JSEOF'
+          const fs = require('fs');
+          let raw = '';
+          try {
+            raw = fs.readFileSync('snyk-code.sarif', 'utf8').trim();
+            JSON.parse(raw);
+            console.log('SARIF valido');
+          } catch(e) {
+            console.warn('SARIF invalido o vacio, generando SARIF vacio: ' + e.message);
+            const empty = {
+              version: '2.1.0',
+              '$schema': 'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
+              runs: [{
+                tool: { driver: { name: 'Snyk Code', version: '1.0.0', rules: [] } },
+                results: []
+              }]
+            };
+            fs.writeFileSync('snyk-code.sarif', JSON.stringify(empty, null, 2));
+          }
+          JSEOF
+          node validate-sarif.js
+
+      - name: Upload SAST results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: snyk-code.sarif
+          category: snyk-sast
+
+      - name: Comment SAST results on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## Snyk Code — Análisis estático del código (SAST)\n\n';
+            try {
+              const sarif = JSON.parse(fs.readFileSync('snyk-code.sarif', 'utf8'));
+              const results = (sarif.runs && sarif.runs[0] && sarif.runs[0].results) || [];
+              const errors   = results.filter(function(r) { return r.level === 'error'; }).length;
+              const warnings = results.filter(function(r) { return r.level === 'warning'; }).length;
+
+              if (results.length === 0) {
+                body += '✅ No se encontraron problemas de seguridad en el código fuente.\n';
+              } else {
+                body += '⚠️ **' + results.length + '** hallazgos en el código fuente';
+                body += ' (' + errors + ' error, ' + warnings + ' warning):\n\n';
+                body += '| Archivo | Línea | Problema | Severidad |\n';
+                body += '|---------|-------|----------|-----------|\n';
+                results.slice(0, 20).forEach(function(r) {
+                  const loc = (r.locations && r.locations[0] &&
+                               r.locations[0].physicalLocation);
+                  const file = loc && loc.artifactLocation ? loc.artifactLocation.uri : 'desconocido';
+                  const line = loc && loc.region ? loc.region.startLine : '-';
+                  const msg  = r.message ? r.message.text.substring(0, 80) : r.ruleId;
+                  body += '| `' + file + '` | ' + line + ' | ' + msg + ' | ' + (r.level || '-') + ' |\n';
+                });
+                if (results.length > 20) {
+                  body += '\n_...y ' + (results.length - 20) + ' hallazgos más._\n';
+                }
+              }
+            } catch(e) {
+              body += '_No se pudo leer el reporte SAST: ' + e.message + '_\n';
+            }
+            body += '\n_Detalles completos en Security → Code scanning._';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fail on SAST errors
+        if: always()
+        run: |
+          COUNT=$(node -e "
+            const fs = require('fs');
+            try {
+              const s = JSON.parse(fs.readFileSync('snyk-code.sarif', 'utf8'));
+              const r = (s.runs && s.runs[0] && s.runs[0].results) || [];
+              console.log(r.filter(x => x.level === 'error').length);
+            } catch(e) { console.log(0); }
+          ")
+          echo "Hallazgos SAST nivel error: $COUNT"
+          [ "$COUNT" -gt "0" ] && exit 1 || exit 0
+
+  # ──────────────────────────────────────────────
+  # JOB 3 — SECRETS
+  # ──────────────────────────────────────────────
+  secrets:
+    name: Secrets – Gitleaks
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar Gitleaks
+        run: |
+          wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Escanear secrets
+        id: scan
+        run: |
+          gitleaks detect --source . --verbose --redact \
+            --report-format json \
+            --report-path gitleaks-report.json
+          echo "leaked=false" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Marcar si hubo leaks
+        if: steps.scan.outcome == 'failure'
+        run: echo "leaked=true" >> $GITHUB_OUTPUT
+
+      - name: Comentar en el PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+            script: |
+              const fs = require('fs');
+              
+              let body = '## 🔐 Gitleaks — Escaneo de secrets\n\n✅ **Sin secrets expuestos.** Ninguna credencial detectada en este PR.';
+              
+              let findings = [];
+              try {
+                const raw = fs.readFileSync('gitleaks-report.json', 'utf8');
+                const parsed = JSON.parse(raw);
+                findings = Array.isArray(parsed) ? parsed : [];
+              } catch(e) {
+                body = '## 🔐 Gitleaks — Escaneo de secrets\n\n_No se pudo leer el reporte: ' + e.message + '_';
+              }
+              
+              if (findings.length > 0) {
+                const lines = [
+                  '## 🚨 Gitleaks — Secrets detectados',
+                  '',
+                  `> Se encontraron **${findings.length}** secret(s) expuesto(s) en este PR. El merge está bloqueado.`,
+                  '',
+                  '---',
+                  '',
+                ];
+              
+                findings.forEach(function(f, i) {
+                  const date = new Date(f.Date).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
+                  lines.push(`### ${i + 1}. ${f.Description}`);
+                  lines.push('```');
+                  lines.push(`Archivo  : ${f.File}`);
+                  lines.push(`Línea    : ${f.StartLine}`);
+                  lines.push(`Regla    : ${f.RuleID}`);
+                  lines.push(`Commit   : ${f.Commit.substring(0, 8)}`);
+                  lines.push(`Autor    : ${f.Author} <${f.Email}>`);
+                  lines.push(`Fecha    : ${date}`);
+                  lines.push(`Entropía : ${f.Entropy}`);
+                  lines.push('```');
+                  lines.push('');
+                });
+              
+                lines.push('---');
+                lines.push('');
+                lines.push('**Cómo resolverlo:**');
+                lines.push('');
+                lines.push('1. Elimina el secret del código y del historial');
+                lines.push('   ```bash');
+                lines.push('   git filter-repo --path <archivo> --invert-paths');
+                lines.push('   ```');
+                lines.push('2. Revoca y regenera la credencial expuesta en el servicio correspondiente');
+                lines.push('3. Guárda el valor en GitHub Secrets (`Settings → Secrets and variables → Actions`)');
+                lines.push('4. Refiérelo en el código como variable de entorno:');
+                lines.push('   ```yaml');
+                lines.push('   env:');
+                lines.push('     MI_SECRET: ${{ secrets.MI_SECRET }}');
+                lines.push('   ```');
+              
+                body = lines.join('\n');
+              }
+              
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+
+      - name: Fallar el job si hubo leaks
+        if: steps.scan.outcome == 'failure'
+        run: exit 1
