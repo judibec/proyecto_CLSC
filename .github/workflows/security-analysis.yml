@@ -289,6 +289,14 @@ jobs:
         if: steps.scan.outcome == 'failure'
         run: echo "leaked=true" >> $GITHUB_OUTPUT
 
+      - name: Debug reporte
+        if: always()
+        run: |
+            echo "--- Existe el archivo? ---"
+            ls -la gitleaks-report.json || echo "No existe"
+            echo "--- Contenido ---"
+            cat gitleaks-report.json || echo "Vacío o no existe"
+
       - name: Comentar en el PR
         if: always()
         uses: actions/github-script@v7
